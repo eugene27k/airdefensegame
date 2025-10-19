@@ -1,10 +1,17 @@
+
+try:
+    from importlib.util import find_spec as _find_spec
+except ImportError:  # pragma: no cover - legacy Python fallback
+    from importlib import find_loader as _find_spec  # type: ignore[attr-defined]
 import math
 import random
 import sys
 from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
-if importlib.util.find_spec("pygame") is None:
+# created by Eugene K - the BA
+
+if _find_spec("pygame") is None:
     sys.stderr.write(
         "Pygame is required to run Air Defense Simulator.\n"
         "Install dependencies with 'pip install -r requirements.txt' and try again.\n"
