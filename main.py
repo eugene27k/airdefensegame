@@ -70,6 +70,11 @@ LEVEL_TARGET_COUNT = 20
 LEVEL_COMPLETE_PAUSE = 3.0
 
 
+def lerp_color(color_a: Tuple[int, int, int], color_b: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
+    t = max(0.0, min(1.0, t))
+    return tuple(int(a + (b - a) * t) for a, b in zip(color_a, color_b))
+
+
 @dataclass
 class Target:
     position: pygame.Vector2
@@ -131,6 +136,42 @@ class Missile:
 
 
 @dataclass
+class Explosion:
+    position: pygame.Vector2
+    timer: float = 0.0
+    lifetime: float = 0.6
+
+    def update(self, dt: float) -> None:
+        self.timer += dt
+
+    @property
+    def alive(self) -> bool:
+        return self.timer < self.lifetime
+
+    def draw(self, surface: pygame.Surface) -> None:
+        progress = min(1.0, self.timer / self.lifetime)
+        min_radius = 14 * SCALE
+        max_radius = 54 * SCALE
+        radius = max(1, int(min_radius + (max_radius - min_radius) * progress))
+        size = radius * 2
+        explosion_surface = pygame.Surface((size, size), pygame.SRCALPHA)
+        center = (radius, radius)
+
+        outer_alpha = max(0, int(200 * (1 - progress)))
+        inner_alpha = max(0, int(255 * (1 - progress * 0.8)))
+
+        pygame.draw.circle(explosion_surface, (255, 140, 60, outer_alpha), center, radius)
+        pygame.draw.circle(
+            explosion_surface,
+            (255, 230, 180, inner_alpha),
+            center,
+            max(1, int(radius * 0.6)),
+        )
+
+        surface.blit(explosion_surface, explosion_surface.get_rect(center=self.position))
+
+
+@dataclass
 class SupportCar:
     position: pygame.Vector2
     index: int
@@ -189,7 +230,7 @@ class SupportCar:
 class AirDefenseGame:
     def __init__(self) -> None:
         pygame.init()
-        pygame.display.set_caption("Air Defense Simulator")
+        pygame.display.set_caption("Air Defense Simulator – Made by Eugene K - the BA")
         self.screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
         self.clock = pygame.time.Clock()
         self.font = pygame.font.SysFont("consolas", int(20 * SCALE))
@@ -202,6 +243,7 @@ class AirDefenseGame:
     def reset(self) -> None:
         self.targets: List[Target] = []
         self.missiles: List[Missile] = []
+        self.explosions: List[Explosion] = []
         self.cars: List[SupportCar] = [SupportCar(BASE_POSITION + offset, idx) for idx, offset in enumerate(CAR_OFFSETS, start=1)]
         self.spawn_timer = TARGET_SPAWN_INTERVAL
         self.selected_target: Optional[Target] = None
@@ -216,6 +258,7 @@ class AirDefenseGame:
         self.level_complete = False
         self.level_transition_timer = 0.0
         self.lock_timer = 0.0
+        self.radar_damage_timer = 0.0
         self.apply_level_parameters()
 
     def apply_level_parameters(self) -> None:
@@ -231,6 +274,7 @@ class AirDefenseGame:
             target.alive = False
         for missile in self.missiles:
             missile.active = False
+        self.explosions.clear()
 
     def advance_level(self) -> None:
         self.level += 1
@@ -241,6 +285,7 @@ class AirDefenseGame:
         self.spawn_timer = TARGET_SPAWN_INTERVAL
         self.targets.clear()
         self.missiles.clear()
+        self.explosions.clear()
         self.selected_target = None
         self.lock_timer = 0.0
 
@@ -283,7 +328,8 @@ class AirDefenseGame:
             return
         target_type = random.choice(list(TARGET_TYPES.keys()))
         speed_range = TARGET_TYPES[target_type]["speed"]
-        speed = random.uniform(*speed_range) * self.enemy_speed_multiplier
+        base_speed = random.uniform(*speed_range) * 0.8
+        speed = base_speed * self.enemy_speed_multiplier
 
         angle = random.uniform(0, 360)
         spawn_distance = RADAR_RADIUS + 90 * SCALE
@@ -375,6 +421,7 @@ class AirDefenseGame:
             if missile.target.alive and missile.position.distance_to(missile.target.position) < 12 * SCALE:
                 missile.active = False
                 missile.target.alive = False
+                self.explosions.append(Explosion(missile.target.position.copy()))
                 self.score += TARGET_TYPES[missile.target.target_type]["score"] * self.score_multiplier
                 if not self.level_complete:
                     self.targets_destroyed += 1
@@ -386,6 +433,7 @@ class AirDefenseGame:
             if target.position.distance_to(BASE_POSITION) < BASE_RADIUS:
                 target.alive = False
                 self.lives -= 1
+                self.radar_damage_timer = 0.5
                 if self.lives <= 0:
                     self.game_over = True
 
@@ -402,7 +450,13 @@ class AirDefenseGame:
         self.missiles = [missile for missile in self.missiles if missile.active]
 
     def update(self, dt: float) -> None:
+        self.radar_damage_timer = max(0.0, self.radar_damage_timer - dt)
+        for explosion in self.explosions:
+            explosion.update(dt)
+        self.explosions = [explosion for explosion in self.explosions if explosion.alive]
+
         if self.game_over:
+            self.lock_timer = 0.0
             return
 
         if self.selected_target and self.selected_target.alive:
@@ -423,21 +477,45 @@ class AirDefenseGame:
 
         self.update_entities(dt)
 
-    def draw_radar(self, surface: pygame.Surface, sweep_angle: float) -> None:
+    def draw_radar(self, surface: pygame.Surface, sweep_angle: float, damage_flash: float) -> None:
         ring_width = max(1, int(2 * SCALE))
-        pygame.draw.circle(surface, RADAR_RING_COLOR, BASE_POSITION, RADAR_RADIUS, ring_width)
-        pygame.draw.circle(surface, RADAR_RING_COLOR, BASE_POSITION, BASE_RADIUS, max(1, int(1 * SCALE)))
+        radar_background_color = lerp_color((12, 22, 32), (150, 40, 40), damage_flash)
+        ring_color = lerp_color(RADAR_RING_COLOR, (220, 70, 70), damage_flash)
+        sweep_color = lerp_color(RADAR_SWEEP_COLOR, (255, 90, 90), damage_flash)
+        crosshair_color = lerp_color((30, 70, 70), (190, 60, 60), damage_flash)
+
+        pygame.draw.circle(surface, radar_background_color, BASE_POSITION, RADAR_RADIUS)
+        pygame.draw.circle(surface, ring_color, BASE_POSITION, RADAR_RADIUS, ring_width)
+        pygame.draw.circle(surface, ring_color, BASE_POSITION, BASE_RADIUS, max(1, int(1 * SCALE)))
         for ring in range(1, 4):
-            pygame.draw.circle(surface, (30, 80, 80), BASE_POSITION, RADAR_RADIUS * ring / 4, max(1, int(SCALE)))
+            pygame.draw.circle(
+                surface,
+                lerp_color((30, 80, 80), (200, 90, 90), damage_flash),
+                BASE_POSITION,
+                RADAR_RADIUS * ring / 4,
+                max(1, int(SCALE)),
+            )
 
         # Sweep line
         sweep_direction = pygame.Vector2(RADAR_RADIUS, 0).rotate(sweep_angle)
-        pygame.draw.line(surface, RADAR_SWEEP_COLOR, BASE_POSITION, BASE_POSITION + sweep_direction, max(1, int(2 * SCALE)))
+        pygame.draw.line(surface, sweep_color, BASE_POSITION, BASE_POSITION + sweep_direction, max(1, int(2 * SCALE)))
 
         # Crosshair lines
         crosshair_width = max(1, int(SCALE))
-        pygame.draw.line(surface, (30, 70, 70), (BASE_POSITION.x - RADAR_RADIUS, BASE_POSITION.y), (BASE_POSITION.x + RADAR_RADIUS, BASE_POSITION.y), crosshair_width)
-        pygame.draw.line(surface, (30, 70, 70), (BASE_POSITION.x, BASE_POSITION.y - RADAR_RADIUS), (BASE_POSITION.x, BASE_POSITION.y + RADAR_RADIUS), crosshair_width)
+        pygame.draw.line(
+            surface,
+            crosshair_color,
+            (BASE_POSITION.x - RADAR_RADIUS, BASE_POSITION.y),
+            (BASE_POSITION.x + RADAR_RADIUS, BASE_POSITION.y),
+            crosshair_width,
+        )
+        pygame.draw.line(
+            surface,
+            crosshair_color,
+            (BASE_POSITION.x, BASE_POSITION.y - RADAR_RADIUS),
+            (BASE_POSITION.x, BASE_POSITION.y + RADAR_RADIUS),
+            crosshair_width,
+        )
 
     def draw_ui(self) -> None:
         info_lines = [
@@ -464,10 +542,13 @@ class AirDefenseGame:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 0, 0, 160))
             self.screen.blit(overlay, (0, 0))
-            game_over_text = self.big_font.render("Mission Failed", True, WARNING_TEXT_COLOR)
+            game_over_text = self.big_font.render("Game Over", True, WARNING_TEXT_COLOR)
+            score_text = self.font.render(f"Final Score: {self.score}", True, UI_TEXT_COLOR)
             prompt_text = self.font.render("Press R to restart", True, UI_TEXT_COLOR)
-            self.screen.blit(game_over_text, game_over_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20 * SCALE)))
-            self.screen.blit(prompt_text, prompt_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 20 * SCALE)))
+            center_y = SCREEN_HEIGHT // 2
+            self.screen.blit(game_over_text, game_over_text.get_rect(center=(SCREEN_WIDTH // 2, center_y - 30 * SCALE)))
+            self.screen.blit(score_text, score_text.get_rect(center=(SCREEN_WIDTH // 2, center_y)))
+            self.screen.blit(prompt_text, prompt_text.get_rect(center=(SCREEN_WIDTH // 2, center_y + 30 * SCALE)))
         elif self.level_complete:
             overlay = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.SRCALPHA)
             overlay.fill((0, 30, 0, 140))
@@ -477,7 +558,7 @@ class AirDefenseGame:
             self.screen.blit(complete_text, complete_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20 * SCALE)))
             self.screen.blit(next_level_text, next_level_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 20 * SCALE)))
 
-    def draw_entities(self) -> None:
+    def draw_entities(self, damage_flash: float) -> None:
         # Draw support cars
         active_target = self.selected_target if self.selected_target and self.selected_target.alive else None
         for idx, car in enumerate(self.cars, start=1):
@@ -487,8 +568,10 @@ class AirDefenseGame:
             self.screen.blit(label, label.get_rect(center=car.position + pygame.Vector2(0, -30 * SCALE)))
 
         # Draw base commander car
-        pygame.draw.circle(self.screen, (70, 130, 160), BASE_POSITION, BASE_RADIUS)
-        pygame.draw.circle(self.screen, (30, 60, 90), BASE_POSITION, BASE_RADIUS, max(2, int(4 * SCALE)))
+        base_color = lerp_color((70, 130, 160), (220, 70, 70), damage_flash)
+        base_outline = lerp_color((30, 60, 90), (180, 40, 40), damage_flash)
+        pygame.draw.circle(self.screen, base_color, BASE_POSITION, BASE_RADIUS)
+        pygame.draw.circle(self.screen, base_outline, BASE_POSITION, BASE_RADIUS, max(2, int(4 * SCALE)))
 
         # Draw radar targets
         for target in self.targets:
@@ -497,6 +580,10 @@ class AirDefenseGame:
         # Draw missiles
         for missile in self.missiles:
             missile.draw(self.screen)
+
+        # Draw explosions
+        for explosion in self.explosions:
+            explosion.draw(self.screen)
 
         # Draw selection indicator
         if active_target:
@@ -521,8 +608,9 @@ class AirDefenseGame:
 
     def draw(self, sweep_angle: float) -> None:
         self.screen.fill(BACKGROUND_COLOR)
-        self.draw_radar(self.screen, sweep_angle)
-        self.draw_entities()
+        damage_flash = self.radar_damage_timer / 0.5 if self.radar_damage_timer > 0 else 0.0
+        self.draw_radar(self.screen, sweep_angle, damage_flash)
+        self.draw_entities(damage_flash)
         self.draw_ui()
         pygame.display.flip()
 
