@@ -1,10 +1,10 @@
 name: Build and Publish Game (Windows + macOS)
 
 on:
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch:
 
 permissions:
-  contents: write     # allow committing builds to repo
+  contents: write
 
 jobs:
   build:
@@ -33,7 +33,11 @@ jobs:
       - name: Prepare latest-apps folder
         run: |
           mkdir -p latest-apps
-          cp dist/* latest-apps/ || xcopy dist latest-apps /Y
+          if [ "$RUNNER_OS" == "Windows" ]; then
+            powershell Copy-Item dist\* latest-apps\ -Recurse -Force
+          else
+            cp dist/* latest-apps/
+          fi
 
       - name: Commit and push builds
         run: |
