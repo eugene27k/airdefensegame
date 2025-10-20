@@ -7,7 +7,7 @@ import math
 import random
 import sys
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 # created by Eugene K - the BA
 
@@ -20,8 +20,11 @@ if _find_spec("pygame") is None:
 
 import pygame
 
+pygame.mixer.pre_init(22050, 8, 1, 256)
+
 # Global scale to boost resolution while keeping aspect ratio
 SCALE = 1.5
+SAMPLE_RATE = 22050
 
 # Screen configuration
 SCREEN_WIDTH = int(960 * SCALE)
@@ -70,9 +73,34 @@ LEVEL_TARGET_COUNT = 20
 LEVEL_COMPLETE_PAUSE = 3.0
 
 
+def clamp(value: float, minimum: float, maximum: float) -> float:
+    return max(minimum, min(maximum, value))
+
+
 def lerp_color(color_a: Tuple[int, int, int], color_b: Tuple[int, int, int], t: float) -> Tuple[int, int, int]:
     t = max(0.0, min(1.0, t))
     return tuple(int(a + (b - a) * t) for a, b in zip(color_a, color_b))
+
+
+def build_tone_buffer(sequence: Sequence[Tuple[float, float, float, bool]]) -> bytes:
+    buffer = bytearray()
+    for frequency, duration, volume, decay in sequence:
+        total_samples = max(1, int(SAMPLE_RATE * duration))
+        amplitude = int(127 * clamp(volume, 0.0, 1.0))
+        if frequency <= 0:
+            buffer.extend([128] * total_samples)
+            continue
+        period = max(1, int(SAMPLE_RATE / frequency))
+        half_period = max(1, period // 2)
+        for i in range(total_samples):
+            if decay:
+                current_amplitude = int(amplitude * (1 - i / total_samples))
+            else:
+                current_amplitude = amplitude
+            toggle = 1 if ((i // half_period) % 2 == 0) else -1
+            sample_value = 128 + toggle * current_amplitude
+            buffer.append(int(clamp(sample_value, 0, 255)))
+    return bytes(buffer)
 
 
 @dataclass
@@ -177,7 +205,13 @@ class SupportCar:
     index: int
     cool_down: float = 0.0
 
-    def draw(self, surface: pygame.Surface, ready: bool, selected_target: Optional[Target]) -> None:
+    def draw(
+        self,
+        surface: pygame.Surface,
+        ready: bool,
+        selected_target: Optional[Target],
+        font: pygame.font.Font,
+    ) -> None:
         target_active = selected_target is not None and selected_target.alive
         car_color = (90, 180, 90) if ready else (70, 90, 70)
         car_size = pygame.Vector2(60 * SCALE, 36 * SCALE)
@@ -212,6 +246,11 @@ class SupportCar:
             turret_color = (100, 150, 100)
         pygame.draw.rect(surface, turret_color, turret_rect, border_radius=int(6 * SCALE))
 
+        label_color = (20, 40, 20) if ready else (110, 110, 110)
+        label_surface = font.render(str(self.index), True, label_color)
+        label_rect = label_surface.get_rect(center=self.position)
+        surface.blit(label_surface, label_rect)
+
         # Turret barrel orientation
         if target_active:
             direction = (selected_target.position - pygame.Vector2(turret_rect.center))
@@ -237,6 +276,10 @@ class AirDefenseGame:
         self.big_font = pygame.font.SysFont("consolas", int(32 * SCALE), bold=True)
         self.title_font = pygame.font.SysFont("consolas", int(48 * SCALE), bold=True)
         self.subtitle_font = pygame.font.SysFont("consolas", int(28 * SCALE))
+        self.audio_enabled = False
+        self.sounds: dict[str, pygame.mixer.Sound] = {}
+        self.setup_audio()
+        self.has_started = False
         self.reset()
         self.show_intro()
 
@@ -260,10 +303,50 @@ class AirDefenseGame:
         self.lock_timer = 0.0
         self.radar_damage_timer = 0.0
         self.apply_level_parameters()
+        if self.has_started:
+            self.play_sound("start")
+        else:
+            self.has_started = True
 
     def apply_level_parameters(self) -> None:
         self.enemy_speed_multiplier = 1.0 + 0.05 * (self.level - 1)
         self.score_multiplier = 2 ** (self.level - 1)
+
+    def setup_audio(self) -> None:
+        try:
+            if pygame.mixer.get_init() is None:
+                pygame.mixer.init(22050, 8, 1, 256)
+        except pygame.error:
+            self.audio_enabled = False
+            self.sounds = {}
+            return
+        self.audio_enabled = True
+        self.load_sounds()
+
+    def load_sounds(self) -> None:
+        if not self.audio_enabled:
+            return
+
+        def make_sound(sequence: Sequence[Tuple[float, float, float, bool]]) -> pygame.mixer.Sound:
+            return pygame.mixer.Sound(buffer=build_tone_buffer(sequence))
+        try:
+            self.sounds = {
+                "shot": make_sound(((1200, 0.12, 0.7, True),)),
+                "explosion": make_sound(((220, 0.24, 0.85, True), (90, 0.34, 0.75, True))),
+                "damage": make_sound(((200, 0.16, 0.8, False), (70, 0.24, 0.85, True))),
+                "start": make_sound(((360, 0.12, 0.6, False), (540, 0.12, 0.6, False), (720, 0.18, 0.5, True))),
+                "game_over": make_sound(((260, 0.28, 0.75, True), (150, 0.32, 0.7, True))),
+            }
+        except pygame.error:
+            self.audio_enabled = False
+            self.sounds = {}
+
+    def play_sound(self, key: str) -> None:
+        if not self.audio_enabled:
+            return
+        sound = self.sounds.get(key)
+        if sound:
+            sound.play()
 
     def start_level_complete(self) -> None:
         self.level_complete = True
@@ -290,7 +373,7 @@ class AirDefenseGame:
         self.lock_timer = 0.0
 
     def show_intro(self) -> None:
-        intro_duration = 2.0
+        intro_duration = 2.5
         elapsed = 0.0
         fade_color = (20, 40, 60)
         skip = False
@@ -322,6 +405,7 @@ class AirDefenseGame:
                 current_y += text_surface.get_height() + spacing
 
             pygame.display.flip()
+        self.play_sound("start")
 
     def spawn_target(self) -> None:
         if len(self.targets) >= MAX_TARGETS:
@@ -403,6 +487,7 @@ class AirDefenseGame:
         missile = Missile(position=car.position.copy(), velocity=velocity, source_index=car_index, target=self.selected_target)
         self.missiles.append(missile)
         car.cool_down = 1.8
+        self.play_sound("shot")
 
     def update_entities(self, dt: float) -> None:
         for target in self.targets:
@@ -422,6 +507,7 @@ class AirDefenseGame:
                 missile.active = False
                 missile.target.alive = False
                 self.explosions.append(Explosion(missile.target.position.copy()))
+                self.play_sound("explosion")
                 self.score += TARGET_TYPES[missile.target.target_type]["score"] * self.score_multiplier
                 if not self.level_complete:
                     self.targets_destroyed += 1
@@ -434,8 +520,10 @@ class AirDefenseGame:
                 target.alive = False
                 self.lives -= 1
                 self.radar_damage_timer = 0.5
-                if self.lives <= 0:
+                self.play_sound("damage")
+                if self.lives <= 0 and not self.game_over:
                     self.game_over = True
+                    self.play_sound("game_over")
 
         # Remove targets that escape radar bounds
         for target in self.targets:
@@ -561,11 +649,9 @@ class AirDefenseGame:
     def draw_entities(self, damage_flash: float) -> None:
         # Draw support cars
         active_target = self.selected_target if self.selected_target and self.selected_target.alive else None
-        for idx, car in enumerate(self.cars, start=1):
+        for car in self.cars:
             ready = car.cool_down <= 0 and not self.game_over
-            car.draw(self.screen, ready, active_target)
-            label = self.font.render(str(idx), True, UI_TEXT_COLOR)
-            self.screen.blit(label, label.get_rect(center=car.position + pygame.Vector2(0, -30 * SCALE)))
+            car.draw(self.screen, ready, active_target, self.font)
 
         # Draw base commander car
         base_color = lerp_color((70, 130, 160), (220, 70, 70), damage_flash)
