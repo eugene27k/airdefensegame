@@ -1,0 +1,75 @@
+name: Build desktop apps
+
+on:
+  workflow_dispatch:
+
+env:
+  APP_DOWNLOAD_ROOT: app_download
+
+jobs:
+  build-windows:
+    name: Build Windows executable
+    runs-on: windows-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build Windows executable
+        run: |
+          pyinstaller main.py --noconfirm --onefile --windowed --name AirDefenseGame
+
+      - name: Stage build in app download folder
+        run: |
+          $targetDir = Join-Path "${{ env.APP_DOWNLOAD_ROOT }}" "windows"
+          New-Item -ItemType Directory -Path $targetDir -Force | Out-Null
+          Copy-Item "dist/AirDefenseGame.exe" (Join-Path $targetDir "AirDefenseGame.exe") -Force
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-app-download
+          path: app_download/windows
+
+  build-macos:
+    name: Build macOS app bundle
+    runs-on: macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+
+      - name: Build macOS app
+        run: |
+          pyinstaller main.py --noconfirm --windowed --name AirDefenseGame
+
+      - name: Stage build in app download folder
+        run: |
+          target_dir="${{ env.APP_DOWNLOAD_ROOT }}/macos"
+          mkdir -p "$target_dir"
+          rm -rf "$target_dir/AirDefenseGame.app"
+          cp -R "dist/AirDefenseGame.app" "$target_dir/"
+
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-app-download
+          path: app_download/macos
