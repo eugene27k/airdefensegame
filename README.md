@@ -27,7 +27,7 @@ python main.py
 1. **Detect** – Watch the expanded radar scope for drones (blue) and missiles (red) intruding into the defensive bubble.
 2. **Select** – Left click on a contact to lock it. A pulsing reticle highlights the chosen target and turrets on each vehicle swivel toward the threat.
 3. **Engage** – Press `1`, `2`, or `3` to order the left, northern, or right support car to launch an interceptor. Each car requires a short cool-down before firing again.
-4. **Advance levels** – Destroy 20 targets to complete the current mission. Every new level raises hostile speeds by 5 % and doubles the points earned per kill. Survive as long as possible to chase high scores.
+4. **Advance levels** – Destroy 20 targets to complete the current mission. Every new level raises hostile speeds by 10 % and doubles the points earned per kill. A speed readout in the lower-right corner confirms each contact’s current velocity and the average pace per wave.
 5. **Protect the command post** – If a hostile reaches the commander’s vehicle, you lose a life. Press `R` after defeat to restart; press `Esc` to exit.
 
 Each support vehicle proudly carries a Ukrainian flag, and an opening splash screen sets the tone before hostilities begin.

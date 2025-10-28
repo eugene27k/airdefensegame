@@ -309,7 +309,7 @@ class AirDefenseGame:
             self.has_started = True
 
     def apply_level_parameters(self) -> None:
-        self.enemy_speed_multiplier = 1.0 + 0.05 * (self.level - 1)
+        self.enemy_speed_multiplier = 1.1 ** (self.level - 1)
         self.score_multiplier = 2 ** (self.level - 1)
 
     def setup_audio(self) -> None:
@@ -645,6 +645,31 @@ class AirDefenseGame:
             next_level_text = self.font.render(f"Level {self.level + 1} incoming", True, UI_TEXT_COLOR)
             self.screen.blit(complete_text, complete_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 - 20 * SCALE)))
             self.screen.blit(next_level_text, next_level_text.get_rect(center=(SCREEN_WIDTH // 2, SCREEN_HEIGHT // 2 + 20 * SCALE)))
+
+        self.draw_speed_readout()
+
+    def draw_speed_readout(self) -> None:
+        margin = int(24 * SCALE)
+        line_height = int(24 * SCALE)
+        speeds: List[float] = []
+        entries: List[str] = [f"Speed Mult: x{self.enemy_speed_multiplier:.2f}"]
+        for idx, target in enumerate(self.targets, start=1):
+            speed = target.velocity.length()
+            speeds.append(speed)
+            type_tag = target.target_type[0].upper()
+            entries.append(f"{type_tag}{idx}: {speed:5.1f} u/s")
+
+        if speeds:
+            average_speed = sum(speeds) / len(speeds)
+            entries.append(f"Avg: {average_speed:5.1f} u/s")
+        else:
+            entries.append("Avg: --")
+
+        start_y = SCREEN_HEIGHT - margin - line_height * len(entries)
+        for i, line in enumerate(entries):
+            text_surface = self.font.render(line, True, UI_TEXT_COLOR)
+            text_rect = text_surface.get_rect(topright=(SCREEN_WIDTH - margin, start_y + i * line_height))
+            self.screen.blit(text_surface, text_rect)
 
     def draw_entities(self, damage_flash: float) -> None:
         # Draw support cars
